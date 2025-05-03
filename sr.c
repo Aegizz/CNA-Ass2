@@ -59,7 +59,7 @@ static struct pkt buffer[WINDOWSIZE];  /* array for storing packets waiting for 
 static int windowfirst, windowlast;    /* array indexes of the first/last packet awaiting ACK */
 static int windowcount;                /* the number of packets currently awaiting an ACK */
 static int A_nextseqnum;               /* the next sequence number to be used by the sender */
-static int ack_status[WINDOWSIZE - 1]; /* Same as buffer but records acked packets, is less than one because if it is the first packet in the window we removed it anyway*/
+static int ack_status[WINDOWSIZE]; /* Same as buffer but records acked packets, is less than one because if it is the first packet in the window we removed it anyway*/
 
 int get_sender_buffer_index(int seqnum)
 {
