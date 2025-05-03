@@ -112,8 +112,6 @@ void A_output(struct msg message)
 */
 void A_input(struct pkt packet)
 {
-  int ackcount = 0;
-
   /* if received ACK is not corrupted */
   if (!IsCorrupted(packet))
   {
@@ -142,7 +140,7 @@ void A_input(struct pkt packet)
 
           windowfirst = (windowfirst + 1) % WINDOWSIZE;
 
-          //fix this logic
+          /* fix this logic */ 
           int i = 0;
           while (i < windowcount && ack_status[i] == 1){
             windowcount--;
@@ -154,10 +152,12 @@ void A_input(struct pkt packet)
             starttimer(A, RTT);
         } else {
           int index = -1;
-          for (int j = 1; j <= windowlast; j++){
+          int j = 1;
+          while (j <= windowlast){
             if (buffer[j].seqnum == packet.acknum){
               break;
             }
+            j++;
           }
           if (index > -1){
             ack_status[index] = 1;
