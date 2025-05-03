@@ -22,9 +22,10 @@
    - added GBN implementation
 **********************************************************************/
 
-#define RTT 16.0      /* round trip time.  MUST BE SET TO 16.0 when submitting assignment */
-#define WINDOWSIZE 6  /* the maximum number of buffered unacked packet */
-#define SEQSPACE 13    /* the min sequence space for GBN must be at least windowsize + 1 */
+#define RTT 16.0     /* round trip time.  MUST BE SET TO 16.0 when submitting assignment */
+#define WINDOWSIZE 6 /* the maximum number of buffered unacked packet */
+#define SEQSPACE 13  /* the min sequence space for GBN must be at least windowsize + 1 */
+#define BUFFERSIZE 40
 #define NOTINUSE (-1) /* used to fill header fields that are not being used */
 
 /* generic procedure to compute the checksum of a packet.  Used by both sender and receiver
@@ -53,13 +54,47 @@ bool IsCorrupted(struct pkt packet)
     return (true);
 }
 
+bool is_in_send_window(int seq_num, int win_base_seq, int seq_space, int win_size)
+{
+  int next_slot_seq = (win_base_seq + win_size) % seq_space;
+  if (win_base_seq < next_slot_seq)
+  {
+    return (seq_num >= win_base_seq && seq_num < next_slot_seq);
+  }
+  else
+  {
+    return (seq_num >= win_base_seq || seq_num < next_slot_seq);
+  }
+}
+
+
+
 /********* Sender (A) variables and functions ************/
 
-static struct pkt buffer[WINDOWSIZE]; /* array for storing packets waiting for ACK */
-static int windowfirst, windowlast;   /* array indexes of the first/last packet awaiting ACK */
-static int windowcount;               /* the number of packets currently awaiting an ACK */
-static int A_nextseqnum;              /* the next sequence number to be used by the sender */
+static struct pkt buffer[WINDOWSIZE];  /* array for storing packets waiting for ACK */
+static int windowfirst, windowlast;    /* array indexes of the first/last packet awaiting ACK */
+static int windowcount;                /* the number of packets currently awaiting an ACK */
+static int A_nextseqnum;               /* the next sequence number to be used by the sender */
 static int ack_status[WINDOWSIZE - 1]; /* Same as buffer but records acked packets, is less than one because if it is the first packet in the window we removed it anyway*/
+
+
+
+int get_sender_buffer_index(int seqnum)
+{
+  int i;
+  for (i = 0; i < windowcount; i++)
+  {
+    int current_index = (windowfirst + i) % WINDOWSIZE;
+    if (buffer[current_index].seqnum == seqnum)
+    {
+      return current_index;
+    }
+  }
+  return -1;
+}
+
+
+
 /* called from layer 5 (application layer), passed the message to be sent to other side */
 void A_output(struct msg message)
 {
@@ -74,14 +109,14 @@ void A_output(struct msg message)
 
     /* create packet */
     sendpkt.seqnum = A_nextseqnum;
-    sendpkt.acknum = NOTINUSE;
+    sendpkt.acknum = A_nextseqnum;
     for (i = 0; i < 20; i++)
       sendpkt.payload[i] = message.data[i];
     sendpkt.checksum = ComputeChecksum(sendpkt);
 
     /* put packet in window buffer */
     /* windowlast will always be 0 for alternating bit; but not for GoBackN */
-    windowlast = (windowlast + 1) % WINDOWSIZE;
+    windowlast = (windowfirst + windowcount) % WINDOWSIZE;
     buffer[windowlast] = sendpkt;
     ack_status[windowlast] = 0;
     windowcount++;
@@ -120,13 +155,10 @@ void A_input(struct pkt packet)
     total_ACKs_received++;
 
     /* check if new ACK or duplicate */
-    if (windowcount != 0)
+    if (windowcount != 0 && is_in_send_window(packet.acknum, buffer[windowfirst].seqnum, SEQSPACE, WINDOWSIZE))
     {
-      int seqfirst = buffer[windowfirst].seqnum;
-      int seqlast = buffer[windowlast].seqnum;
-      /* check case when seqnum has and hasn't wrapped */
-      if (((seqfirst <= seqlast) && (packet.acknum >= seqfirst && packet.acknum <= seqlast)) ||
-          ((seqfirst > seqlast) && (packet.acknum >= seqfirst || packet.acknum <= seqlast)))
+      int index = get_sender_buffer_index(packet.acknum);
+      if (index != -1 && !ack_status[index])
       {
 
         /* packet is a new ACK */
@@ -134,36 +166,24 @@ void A_input(struct pkt packet)
           printf("----A: ACK %d is not a duplicate\n", packet.acknum);
         new_ACKs++;
 
-
+        ack_status[index] = 1;
         /* FIX THIS, NEEDS TO BE INDIVIDUAL */
-        if (windowcount > 0 && packet.acknum == buffer[windowfirst].seqnum){
-
-          windowfirst = (windowfirst + 1) % WINDOWSIZE;
-
-          /* fix this logic */ 
-          int i = 0;
-          while (i < windowcount && ack_status[i] == 1){
-            windowcount--;
-            ack_status[i] = 0;
-          }
-          /* start timer again if there are still more unacked packets in window */
+        if (index == windowfirst)
+        {
           stoptimer(A);
-          if (windowcount > 0)
-            starttimer(A, RTT);
-        } else {
-          int index = -1;
-          int j = 1;
-          while (j <= windowlast){
-            if (buffer[j].seqnum == packet.acknum){
-              break;
-            }
-            j++;
+
+          while (windowcount > 0 && ack_status[windowfirst])
+          {
+            ack_status[windowfirst] = false;
+            windowfirst = (windowfirst + 1) % WINDOWSIZE;
+            windowcount--;
           }
-          if (index > -1){
-            ack_status[index] = 1;
+
+          if (windowcount > 0)
+          {
+            starttimer(A, RTT);
           }
         }
-
       }
     }
     else if (TRACE > 0)
