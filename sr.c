@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include "emulator.h"
 #include "gbn.h"
-
+#include <string.h>
 /* ******************************************************************
    Selective Repeat protocol.  Adapted from J.F.Kurose
    ALTERNATING BIT AND GO-BACK-N NETWORK EMULATOR: VERSION 1.2
@@ -76,7 +76,7 @@ int get_sender_buffer_index(int seqnum)
   return -1;
 }
 
-bool is_in_send_window(int seq_num, int win_base_seq, int seq_space, int win_size)
+bool is_in_window(int seq_num, int win_base_seq, int seq_space, int win_size)
 {
   int next_slot_seq;
   
@@ -93,6 +93,14 @@ bool is_in_send_window(int seq_num, int win_base_seq, int seq_space, int win_siz
   {
     return (seq_num >= win_base_seq || seq_num < next_slot_seq);
   }
+}
+
+int get_receiver_buffer_index(int seqnum, int win_base, int seq_space, int win_size_arr) {
+  int offset = (seqnum - win_base + seq_space) % seq_space;
+  if (offset >= 0 && offset < win_size_arr) {
+      return offset;
+  }
+  return -1;
 }
 
 /* called from layer 5 (application layer), passed the message to be sent to other side */
@@ -153,7 +161,7 @@ void A_input(struct pkt packet)
       printf("----A: uncorrupted ACK %d is received\n", packet.acknum);
     total_ACKs_received++; 
 
-    if (is_in_send_window(packet.acknum, buffer[windowfirst].seqnum, SEQSPACE, WINDOWSIZE))
+    if (is_in_window(packet.acknum, buffer[windowfirst].seqnum, SEQSPACE, WINDOWSIZE))
     {
       int index = get_sender_buffer_index(packet.acknum);
 
@@ -253,125 +261,90 @@ void A_timerinterrupt(void)
 void A_init(void)
 {
   int i;
-  
-  /* initialise A's window, buffer and sequence number */
-  A_nextseqnum = 0; /* A starts with seq num 0, do not change this */
+  A_nextseqnum = 0;
   windowfirst = 0;
   windowlast = -1;
   windowcount = 0;
-  
-  /* Initialize ack_status and timer_status arrays */
   for (i = 0; i < WINDOWSIZE; i++) {
-    ack_status[i] = false;
-    timer_status[i] = 0;
+      ack_status[i] = false;
   }
 }
 
-/********* Receiver (B)  variables and procedures ************/
+static int expectedseqnum;
+static struct pkt B_rcv_buffer[WINDOWSIZE];
+static bool B_received_status[WINDOWSIZE];
 
-static int expectedseqnum;  /* the sequence number expected next by the receiver */
-static int B_nextseqnum;    /* the sequence number for the next packets sent by B */
-static struct pkt recv_buffer[WINDOWSIZE]; /* buffer for out-of-order packets */
-static int recv_status[WINDOWSIZE];        /* tracks which packets have been received */
-static int recv_windowbase;                /* base sequence number of receive window */
-
-/* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet)
 {
-  struct pkt sendpkt;
+  struct pkt ackpkt;
   int i;
+  int buffer_index;
 
-  if (!IsCorrupted(packet)) {
-    int seqnum = packet.seqnum;
-    
-    /* Check if packet is within the receive window */
-    if (is_in_send_window(seqnum, recv_windowbase, SEQSPACE, WINDOWSIZE)) {
-      int offset = (seqnum - recv_windowbase + SEQSPACE) % SEQSPACE;
-      int bufIdx = (recv_windowbase + offset) % WINDOWSIZE;
-      
-      if (TRACE > 0)
-        printf("----B: packet %d is correctly received, send ACK!\n", seqnum);
-      
-      /* Store packet in receive buffer */
-      recv_buffer[bufIdx] = packet;
-      recv_status[bufIdx] = 1;
-      
-      /* If this is the expected in-order packet, deliver it and any contiguous packets */
-      if (seqnum == expectedseqnum) {
-        while (recv_status[expectedseqnum % WINDOWSIZE] == 1) {
-          /* Deliver to application layer */
-          tolayer5(B, recv_buffer[expectedseqnum % WINDOWSIZE].payload);
-          packets_received++;
-          
-          /* Mark as delivered */
-          recv_status[expectedseqnum % WINDOWSIZE] = 0;
-          
-          /* Update expected sequence number */
-          expectedseqnum = (expectedseqnum + 1) % SEQSPACE;
-        }
-        
-        /* Update receive window base */
-        recv_windowbase = expectedseqnum;
-      }
-      
-      sendpkt.acknum = seqnum;
-    } else {
-      if (TRACE > 0)
-        printf("----B: packet %d outside receive window, send ACK anyway!\n", seqnum);
-      sendpkt.acknum = seqnum;
-    }
-  } else {
-    if (TRACE > 0)
-      printf("----B: packet corrupted, discard and resend last ACK!\n");
-    
-    if (expectedseqnum == 0)
-      sendpkt.acknum = SEQSPACE - 1;
-    else
-      sendpkt.acknum = expectedseqnum - 1;
+  ackpkt.seqnum = NOTINUSE;
+  for (i = 0; i < 20; i++) ackpkt.payload[i] = '0';
+
+  if (IsCorrupted(packet)) {
+    if (TRACE > 0) printf("----B: packet corrupted, do nothing\n");
+    return;
   }
 
-  /* create packet */
-  sendpkt.seqnum = B_nextseqnum;
-  B_nextseqnum = (B_nextseqnum + 1) % 2;
+  if (is_in_window(packet.seqnum, expectedseqnum, SEQSPACE, WINDOWSIZE))
+  {
+      buffer_index = get_receiver_buffer_index(packet.seqnum, expectedseqnum, SEQSPACE, WINDOWSIZE);
+      if (buffer_index != -1) {
+          ackpkt.acknum = packet.seqnum;
+          ackpkt.checksum = ComputeChecksum(ackpkt);
+          tolayer3(B, ackpkt);
+          if (TRACE > 0) printf("----B: packet %d received, sent ACK %d.\n", packet.seqnum, packet.seqnum);
 
-  /* we don't have any data to send.  fill payload with 0's */
-  for (i = 0; i < 20; i++)
-    sendpkt.payload[i] = '0';
+          if (!B_received_status[buffer_index]) {
+              B_rcv_buffer[buffer_index] = packet;
+              B_received_status[buffer_index] = true;
+              packets_received++;
 
-  /* computer checksum */
-  sendpkt.checksum = ComputeChecksum(sendpkt);
+              if (TRACE > 1) printf("----B: Buffered packet %d at index %d.\n", packet.seqnum, buffer_index);
+          } else {
+               if (TRACE > 1) printf("----B: Duplicate packet %d received (already buffered).\n", packet.seqnum);
+          }
 
-  /* send out packet */
-  tolayer3(B, sendpkt);
+          while (B_received_status[0]) {
+              if (TRACE > 0) printf("----B: Delivering packet %d (seq %d) from buffer to layer 5.\n", B_rcv_buffer[0].seqnum, expectedseqnum);
+              tolayer5(B, B_rcv_buffer[0].payload);
+
+              B_received_status[0] = false;
+              expectedseqnum = (expectedseqnum + 1) % SEQSPACE;
+
+              memmove(&B_rcv_buffer[0], &B_rcv_buffer[1], sizeof(struct pkt) * (WINDOWSIZE - 1));
+              memmove(&B_received_status[0], &B_received_status[1], sizeof(bool) * (WINDOWSIZE - 1));
+              B_received_status[WINDOWSIZE - 1] = false;
+
+              if (TRACE > 1) printf("----B: Advanced receive window base to %d.\n", expectedseqnum);
+          }
+      } else {
+            if (TRACE > 0) printf("----B: Error calculating buffer index for in-window packet %d\n", packet.seqnum);
+      }
+  }
+  else if (is_in_window(packet.seqnum, (expectedseqnum - WINDOWSIZE + SEQSPACE) % SEQSPACE, SEQSPACE, WINDOWSIZE))
+  {
+     if (TRACE > 0) printf("----B: Received old packet %d (expected base %d), resending ACK %d.\n", packet.seqnum, expectedseqnum, packet.seqnum);
+     ackpkt.acknum = packet.seqnum;
+     ackpkt.checksum = ComputeChecksum(ackpkt);
+     tolayer3(B, ackpkt);
+  }
+  else
+  {
+     if (TRACE > 0) printf("----B: Received out-of-window packet %d (expected base %d), discarding.\n", packet.seqnum, expectedseqnum);
+  }
 }
 
-/* the following routine will be called once (only) before any other */
-/* entity B routines are called. You can use it to do any initialization */
 void B_init(void)
 {
   int i;
-  
   expectedseqnum = 0;
-  B_nextseqnum = 1;
-  recv_windowbase = 0;
-  
-  /* Initialize receive buffer status */
   for (i = 0; i < WINDOWSIZE; i++) {
-    recv_status[i] = 0;
+      B_received_status[i] = false;
   }
 }
 
-/******************************************************************************
- * The following functions need be completed only for bi-directional messages *
- *****************************************************************************/
-
-/* Note that with simplex transfer from a-to-B, there is no B_output() */
-void B_output(struct msg message)
-{
-}
-
-/* called when B's timer goes off */
-void B_timerinterrupt(void)
-{
-  /* Not needed for SR implementation with unidirectional traffic */
-}
+void B_output(struct msg message) { }
+void B_timerinterrupt(void) { }
