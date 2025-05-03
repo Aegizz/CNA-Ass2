@@ -33,7 +33,7 @@ bool IsCorrupted(struct pkt packet)
   else return (true);
 }
 
-bool is_in_send_window(int seq_num, int win_base_seq, int seq_space, int win_size)
+bool is_in_window(int seq_num, int win_base_seq, int seq_space, int win_size)
 {
   if (windowcount == 0)
   {
@@ -116,7 +116,7 @@ void A_input(struct pkt packet)
     if (TRACE > 0) printf("----A: uncorrupted ACK %d is received\n", packet.acknum);
     total_ACKs_received++;
 
-    if (is_in_send_window(packet.acknum, buffer[windowfirst].seqnum, SEQSPACE, WINDOWSIZE))
+    if (is_in_window(packet.acknum, buffer[windowfirst].seqnum, SEQSPACE, WINDOWSIZE))
     {
       int index = get_sender_buffer_index(packet.acknum);
 
@@ -195,40 +195,94 @@ void A_init(void)
 
 static int expectedseqnum;
 static int B_nextseqnum;
+static struct pkt B_rcv_buffer[WINDOWSIZE];
+static bool B_received_status[WINDOWSIZE];
 
-/* Reverted to original GBN B_input */
+
+
+int get_receiver_buffer_index(int seqnum, int win_base_seq, int seq_space, int win_size_arr) {
+  int offset = (seqnum - win_base_seq + seq_space) % seq_space;
+  if (offset >= 0 && offset < win_size_arr) {
+      return offset;
+  }
+  return -1;
+}
+
+
 void B_input(struct pkt packet)
 {
-  struct pkt sendpkt;
+  struct pkt ackpkt;
   int i;
+  int buffer_index;
 
-  if ((!IsCorrupted(packet)) && (packet.seqnum == expectedseqnum))
+  ackpkt.seqnum = NOTINUSE;
+  for (i = 0; i < 20; i++) ackpkt.payload[i] = '0';
+
+  if (IsCorrupted(packet)) {
+     return;
+  }
+
+  if (is_in_window(packet.seqnum, expectedseqnum, SEQSPACE, WINDOWSIZE))
   {
-    if (TRACE > 0) printf("----B: packet %d is correctly received, send ACK!\n", packet.seqnum);
-    packets_received++;
-    tolayer5(B, packet.payload);
-    sendpkt.acknum = expectedseqnum;
-    expectedseqnum = (expectedseqnum + 1) % SEQSPACE;
+      buffer_index = get_receiver_buffer_index(packet.seqnum, expectedseqnum, SEQSPACE, WINDOWSIZE);
+
+      if (buffer_index != -1) {
+          ackpkt.acknum = packet.seqnum;
+          ackpkt.checksum = ComputeChecksum(ackpkt);
+          tolayer3(B, ackpkt);
+
+          if (!B_received_status[buffer_index]) {
+              B_rcv_buffer[buffer_index] = packet;
+              B_received_status[buffer_index] = true;
+              packets_received++;
+          }
+
+          bool delivered_packet = false;
+          while (B_received_status[0]) {
+              if (!delivered_packet) {
+                   if (TRACE > 0) printf("----B: packet %d is correctly received, send ACK!\n", B_rcv_buffer[0].seqnum);
+                   delivered_packet = true;
+              }
+              tolayer5(B, B_rcv_buffer[0].payload);
+
+              B_received_status[0] = false;
+              expectedseqnum = (expectedseqnum + 1) % SEQSPACE;
+
+              memmove(&B_rcv_buffer[0], &B_rcv_buffer[1], sizeof(struct pkt) * (WINDOWSIZE - 1));
+              memmove(&B_received_status[0], &B_received_status[1], sizeof(bool) * (WINDOWSIZE - 1));
+              B_received_status[WINDOWSIZE - 1] = false;
+          }
+      } else {
+             if (TRACE > 0) printf("----B: packet corrupted or not expected sequence number, resend ACK!\n");
+             ackpkt.acknum = (expectedseqnum - 1 + SEQSPACE) % SEQSPACE;
+             ackpkt.checksum = ComputeChecksum(ackpkt);
+             tolayer3(B, ackpkt);
+      }
+  }
+  else if (is_in_window(packet.seqnum, (expectedseqnum - WINDOWSIZE + SEQSPACE) % SEQSPACE, SEQSPACE, WINDOWSIZE))
+  {
+     ackpkt.acknum = packet.seqnum;
+     ackpkt.checksum = ComputeChecksum(ackpkt);
+     tolayer3(B, ackpkt);
+     if (TRACE > 0) printf("----B: packet corrupted or not expected sequence number, resend ACK!\n");
   }
   else
   {
-    if (TRACE > 0) printf("----B: packet corrupted or not expected sequence number, resend ACK!\n");
-    if (expectedseqnum == 0) sendpkt.acknum = SEQSPACE - 1;
-    else sendpkt.acknum = expectedseqnum - 1;
+     if (TRACE > 0) printf("----B: packet corrupted or not expected sequence number, resend ACK!\n");
+     ackpkt.acknum = (expectedseqnum - 1 + SEQSPACE) % SEQSPACE;
+     ackpkt.checksum = ComputeChecksum(ackpkt);
+     tolayer3(B, ackpkt);
   }
-
-  sendpkt.seqnum = B_nextseqnum;
-  B_nextseqnum = (B_nextseqnum + 1) % 2;
-  for (i = 0; i < 20; i++) sendpkt.payload[i] = '0';
-  sendpkt.checksum = ComputeChecksum(sendpkt);
-  tolayer3(B, sendpkt);
 }
 
-/* Reverted to original GBN B_init */
+
 void B_init(void)
 {
+  int i;
   expectedseqnum = 0;
-  B_nextseqnum = 1;
+  for (i = 0; i < WINDOWSIZE; i++) {
+      B_received_status[i] = false;
+  }
 }
 
 /******************************************************************************
