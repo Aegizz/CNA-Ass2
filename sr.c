@@ -22,10 +22,9 @@
    - added GBN implementation
 **********************************************************************/
 
-#define RTT 16.0     /* round trip time.  MUST BE SET TO 16.0 when submitting assignment */
-#define WINDOWSIZE 6 /* the maximum number of buffered unacked packet */
-#define SEQSPACE 13  /* the min sequence space for GBN must be at least windowsize + 1 */
-#define BUFFERSIZE 40
+#define RTT 16.0      /* round trip time.  MUST BE SET TO 16.0 when submitting assignment */
+#define WINDOWSIZE 6  /* the maximum number of buffered unacked packet */
+#define SEQSPACE 13   /* the min sequence space for GBN must be at least windowsize + 1 */
 #define NOTINUSE (-1) /* used to fill header fields that are not being used */
 
 /* generic procedure to compute the checksum of a packet.  Used by both sender and receiver
@@ -54,21 +53,6 @@ bool IsCorrupted(struct pkt packet)
     return (true);
 }
 
-bool is_in_send_window(int seq_num, int win_base_seq, int seq_space, int win_size)
-{
-  int next_slot_seq = (win_base_seq + win_size) % seq_space;
-  if (win_base_seq < next_slot_seq)
-  {
-    return (seq_num >= win_base_seq && seq_num < next_slot_seq);
-  }
-  else
-  {
-    return (seq_num >= win_base_seq || seq_num < next_slot_seq);
-  }
-}
-
-
-
 /********* Sender (A) variables and functions ************/
 
 static struct pkt buffer[WINDOWSIZE];  /* array for storing packets waiting for ACK */
@@ -76,8 +60,6 @@ static int windowfirst, windowlast;    /* array indexes of the first/last packet
 static int windowcount;                /* the number of packets currently awaiting an ACK */
 static int A_nextseqnum;               /* the next sequence number to be used by the sender */
 static int ack_status[WINDOWSIZE - 1]; /* Same as buffer but records acked packets, is less than one because if it is the first packet in the window we removed it anyway*/
-
-
 
 int get_sender_buffer_index(int seqnum)
 {
@@ -93,7 +75,22 @@ int get_sender_buffer_index(int seqnum)
   return -1;
 }
 
-
+bool is_in_send_window(int seq_num, int win_base_seq, int seq_space, int win_size)
+{
+  if (windowcount == 0)
+  {
+    return false;
+  }
+  int next_slot_seq = (win_base_seq + win_size) % seq_space;
+  if (win_base_seq < next_slot_seq)
+  {
+    return (seq_num >= win_base_seq && seq_num < next_slot_seq);
+  }
+  else
+  {
+    return (seq_num >= win_base_seq || seq_num < next_slot_seq);
+  }
+}
 
 /* called from layer 5 (application layer), passed the message to be sent to other side */
 void A_output(struct msg message)
@@ -152,22 +149,20 @@ void A_input(struct pkt packet)
   {
     if (TRACE > 0)
       printf("----A: uncorrupted ACK %d is received\n", packet.acknum);
-    total_ACKs_received++;
+    total_ACKs_received++; 
 
-    /* check if new ACK or duplicate */
-    if (windowcount != 0 && is_in_send_window(packet.acknum, buffer[windowfirst].seqnum, SEQSPACE, WINDOWSIZE))
+    if (is_in_send_window(packet.acknum, buffer[windowfirst].seqnum, SEQSPACE, WINDOWSIZE))
     {
       int index = get_sender_buffer_index(packet.acknum);
+
       if (index != -1 && !ack_status[index])
       {
-
-        /* packet is a new ACK */
         if (TRACE > 0)
           printf("----A: ACK %d is not a duplicate\n", packet.acknum);
         new_ACKs++;
+        ack_status[index] = true;
 
-        ack_status[index] = 1;
-        /* FIX THIS, NEEDS TO BE INDIVIDUAL */
+
         if (index == windowfirst)
         {
           stoptimer(A);
@@ -185,14 +180,29 @@ void A_input(struct pkt packet)
           }
         }
       }
+      else if (index != -1 && ack_status[index])
+      {
+        if (TRACE > 0)
+          printf("----A: duplicate ACK received, do nothing!\n");
+      }
+      else
+      {
+        if (TRACE > 0)
+          printf("----A: duplicate ACK received, do nothing!\n");
+      }
     }
-    else if (TRACE > 0)
-      printf("----A: duplicate ACK received, do nothing!\n");
+    else
+    { 
+      if (TRACE > 0)
+        printf("----A: duplicate ACK received, do nothing!\n");
+    }
   }
-  else if (TRACE > 0)
-    printf("----A: corrupted ACK is received, do nothing!\n");
+  else
+  {
+    if (TRACE > 0)
+      printf("----A: corrupted ACK is received, do nothing!\n");
+  }
 }
-
 /* called when A's timer goes off */
 void A_timerinterrupt(void)
 {
