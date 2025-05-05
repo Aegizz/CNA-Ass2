@@ -61,7 +61,7 @@ void A_output(struct msg message)
 
   if (buffered_count < WINDOWSIZE)
   {
-    if (TRACE > 1) printf("----A: New message arrives, send window is not full, send new messge to layer3!\n"); // Keep: From A
+    if (TRACE > 1) printf("----A: New message arrives, send window is not full, send new messge to layer3!\n");
 
     sendpkt.seqnum = A_nextseqnum;
     sendpkt.acknum = NOTINUSE;
@@ -71,7 +71,7 @@ void A_output(struct msg message)
     A_send_buffer[A_nextseqnum % SEQSPACE] = sendpkt;
     A_acked_status[A_nextseqnum % SEQSPACE] = false;
 
-    if (TRACE > 0) printf("Sending packet %d to layer 3\n", sendpkt.seqnum); // Keep: From A
+    if (TRACE > 0) printf("Sending packet %d to layer 3\n", sendpkt.seqnum);
     tolayer3(A, sendpkt);
 
     if (send_base == A_nextseqnum) {
@@ -82,7 +82,7 @@ void A_output(struct msg message)
   }
   else
   {
-    if (TRACE > 0) printf("----A: New message arrives, send window is full\n"); // Keep: From A
+    if (TRACE > 0) printf("----A: New message arrives, send window is full\n");
     window_full++;
   }
 }
@@ -91,11 +91,11 @@ void A_input(struct pkt packet)
 {
     if (IsCorrupted(packet))
     {
-       if (TRACE > 0) printf ("----A: corrupted ACK is received, do nothing!\n"); // Keep: From A
+       if (TRACE > 0) printf ("----A: corrupted ACK is received, do nothing!\n");
        return;
     }
 
-    if (TRACE > 0) printf("----A: uncorrupted ACK %d is received\n", packet.acknum); // Keep: From A
+    if (TRACE > 0) printf("----A: uncorrupted ACK %d is received\n", packet.acknum);
     total_ACKs_received++;
 
     bool in_window = false;
@@ -112,11 +112,11 @@ void A_input(struct pkt packet)
     int ack_index = packet.acknum % SEQSPACE;
 
     if (A_acked_status[ack_index]) {
-       if (TRACE > 0) printf ("----A: duplicate ACK %d received, do nothing!\n"); // Keep: From A
+       if (TRACE > 0) printf ("----A: duplicate ACK %d received, do nothing!\n");
        return;
     }
 
-    if (TRACE > 0) printf("----A: ACK %d is not a duplicate\n", packet.acknum); // Keep: From A
+    if (TRACE > 0) printf("----A: ACK %d is not a duplicate\n", packet.acknum);
     A_acked_status[ack_index] = true;
     new_ACKs++;
 
@@ -145,8 +145,8 @@ void A_timerinterrupt(void)
     struct pkt base_packet = A_send_buffer[base_index];
 
     if (TRACE > 0) {
-        printf("----A: time out, resend packets!\n"); // Keep: From A
-        printf("---A: resending packet %d\n", base_packet.seqnum); // Keep: From A
+        printf("----A: time out, resend packets!\n");
+        printf("---A: resending packet %d\n", base_packet.seqnum);
     }
 
     tolayer3(A, base_packet);
@@ -173,7 +173,7 @@ void B_input(struct pkt packet)
     return;
   }
 
-  if (TRACE > 0) printf("----B: packet %d is correctly received, send ACK!\n",packet.seqnum); // Keep: From A
+  if (TRACE > 0) printf("----B: packet %d is correctly received, send ACK!\n",packet.seqnum);
   packets_received++;
 
   bool in_recv_window = is_seq_in_window(packet.seqnum, expectedseqnum, WINDOWSIZE, SEQSPACE);
